@@ -120,12 +120,20 @@ typedef struct ec_isom_t {
 */
 
 /**
- * @brief j-invariant.
+ * @brief j-invariant in affine form.
  *
  * @param j_inv computed j_invariant
  * @param curve input curve
  */
 void ec_j_inv(fp2_t* j_inv, const ec_curve_t* curve);
+
+/**
+ * @brief j-invariant in projective form.
+ *
+ * @param j_inv computed j_invariant
+ * @param curve input curve
+ */
+void ec_j_inv_proj(ec_point_t* j_inv, const ec_curve_t* curve);
 
 /**
  * @brief Isomorphism of elliptic curve
@@ -218,6 +226,14 @@ void ec_add(ec_point_t* res, const ec_point_t* P, const ec_point_t* Q, const ec_
 void ec_dbl(ec_point_t* res, const ec_curve_t* curve, const ec_point_t* P);
 
 /**
+ * @brief Same as ec_dbl but takes the curve coefficient A24=(A+2C:4C)
+ *
+ * @param res computed double of P
+ * @param P a point
+ */
+void xDBLv2(ec_point_t* res, ec_point_t const* P, ec_point_t const* A24);
+
+/**
  * @brief Point multiplication
  *
  * @param res computed scalar * P
@@ -234,9 +250,32 @@ void ec_mul(ec_point_t* res, const ec_curve_t* curve, const digit_t* scalar, con
  * @param curve the curve
  * @param scalar an unsigned multi-precision integer
  * @param kbits the bit size of scalar
+ * @param A24 the Montgomery coefficient in projective form (A+2)/4
  * @param P a point
  */
 void xMULv2(ec_point_t* Q, ec_point_t const* P, digit_t const* k, const int kbits, ec_point_t const* A24);
+
+/**
+ * @brief Point multiplication based on a precomputed differential addition chain
+ *
+ * @param res computed scalar * P
+ * @param curve the curve
+ * @param dac the binary differential addition chain presented as a digit
+ * @param dac_len the bit length of the dac
+ * @param A24 the Montgomery coefficient in projective form (A+2)/4
+ * @param P a point
+ */
+void xMULdac(ec_point_t* Q, ec_point_t const* P, digit_t dac, int dac_len, ec_point_t const* A24);
+
+
+/**
+ * @brief Point tripling for x-only Montgomery coordinates
+ *
+ * @param res computed scalar * Q
+ * @param A3 the Montgomery coefficient in projective form (A+2)/(A-2)
+ * @param P a point
+ */
+void xTPL(ec_point_t* Q, const ec_point_t* P, const ec_point_t* A3);
 
 /**
  * @brief Combination P+m*Q
@@ -251,6 +290,19 @@ void xMULv2(ec_point_t* Q, ec_point_t const* P, digit_t const* k, const int kbit
 void ec_ladder3pt(ec_point_t *R, const digit_t* m, ec_point_t const *P, ec_point_t const *Q, ec_point_t const *PQ, ec_curve_t const *A);
 
 /**
+ * @brief Same as ec_ladder3pt nut takes the A24 = (A+2C:4C) coefficient and is optimize for a given scalar bitlength
+ *
+ * @param R computed P + m * Q
+ * @param A24 the curve coeffcient in (A+2C:4C) form
+ * @param m an unsigned multi-precision integer
+ * @param mbits the bitlength of m
+ * @param P a point
+ * @param Q a point
+ * @param PQ the difference P-Q
+ */
+void ec_ladder3ptv2(ec_point_t *R, const digit_t* m, const digit_t mbits, ec_point_t const *P, ec_point_t const *Q, ec_point_t const *PQ, ec_point_t const *A24);
+
+/**
  * @brief Linear combination of points of a basis
  *
  * @param res computed scalarP * P + scalarQ * Q
@@ -262,6 +314,25 @@ void ec_ladder3pt(ec_point_t *R, const digit_t* m, ec_point_t const *P, ec_point
 void ec_biscalar_mul(ec_point_t* res, const ec_curve_t* curve,
     const digit_t* scalarP, const digit_t* scalarQ,
     const ec_basis_t* PQ);
+    
+/**
+ * @brief Finds a non-zero root of the montgomery curve equation. The curve 
+ * is passed as A/C and the root returned is independent of the projective
+ * representation as long as C is a square.
+ *
+ * @param curve the curve
+ * @param P2 the projective non-zero root of the curve's equation (a.k.a. a point of order 2)
+ */
+void ec_mont_root(ec_point_t *P2, const ec_curve_t *curve);
+
+/**
+ * @brief Given a non-zero root of the montgomery curve equation, recovers
+ * the curve coefficient in the form A24=(A+2C:4C)
+ *
+ * @param A24 computed curve
+ * @param P2 the projective non-zero root of the curve's equation (a.k.a. a point of order 2)
+ */
+void ec_A24_from_mont_root(ec_point_t *A24, const ec_point_t *P2);
 
 /** @}
 */
@@ -269,6 +340,18 @@ void ec_biscalar_mul(ec_point_t* res, const ec_curve_t* curve,
 /** @defgroup ec_dlog_t Discrete logs and bases
  * @{
 */
+
+/**
+ * @brief Computes the difference of two x-only points
+ *
+ * The algorithm is deterministc
+ *
+ * @param PQ computed point P-Q
+ * @param P a point
+ * @param Q a point
+ * @param curve the curve
+ */
+void difference_point(ec_point_t* PQ, const ec_point_t* P, const ec_point_t* Q, const ec_curve_t* curve);
 
 /**
  * @brief Generate a Montgomery curve and a 2^f-torsion basis
@@ -290,6 +373,17 @@ void ec_curve_to_basis_2(ec_basis_t *PQ2, const ec_curve_t *curve);
  * @param P a point of order 2^f
  */
 void ec_complete_basis_2(ec_basis_t* PQ2, const ec_curve_t* curve, const ec_point_t* P);
+
+/**
+ * @brief More efficient version of ec_complete_basis_2 when P is known to lie over (0,0)
+ *
+ * Provides the same answer as ec_complete_basis_2 as long as P satifies this condition.
+ *
+ * @param PQ2 a basis of the 2^f-torsion containing P as first generator
+ * @param curve the curve
+ * @param P a point of order 2^f over (0,0)
+ */
+void ec_complete_basis_2_singularP(ec_basis_t* PQ2, const ec_curve_t* curve, const ec_point_t* P);
 
 /**
  * @brief Generate a 3^e-torsion basis
@@ -354,6 +448,65 @@ void ec_dlog_3(digit_t* scalarP, digit_t* scalarQ,
  */
 void ec_eval_even(ec_curve_t* image, const ec_isog_even_t* phi,
     ec_point_t* points, unsigned short length);
+    
+/**
+ * @brief Evaluates an isogeny of degree 2^(f-1), where f is the power of 2 in the factorization of p+1,
+ *          and outputs the codomain curve and a non-(0,0) point of order 2 in the image.
+ *          WARNING: if f is odd, then this function only works if the kernel point is not over (0,0).
+ *
+ * @param Pa computed non-(0,0) point of order 2 in the image curve
+ * @param A24out the computed image curve coefficient in the form (A+2C:4C)
+ * @param A24in the domain curve coefficient in the form (A+2C:4C)
+ * @param kernel a kernel generator of order 2^f (note the point must be of order 2^f even though the isogeny is only 2^(f-1)))
+ */
+    void ec_eval_even_strategy_smart(ec_point_t *Pa, ec_point_t* A24out,
+    const ec_point_t* A24in, const ec_point_t *kernel);
+
+/**
+ * @brief Evaluates an isogeny of degree 2^(f-1), where f is the power of 2 in the factorization of p+1, evaluating the
+ * A24 = (A+2C:4C) coefficient and also the j invariant of the second-to-last curve in the chain.
+ * Warning: Only works for even f
+ *
+ * @param A24out computed codomain curve coefficient in the form (A+2C:4C)
+ * @param A24in the domain curve coefficient in the form (A+2C:4C)
+ * @param second_to_last_j_inv computed projective j-invariant of the second-to-last curve in the chain
+ * @param kernel a kernel generator of order 2^(f-1)
+ */
+void ec_eval_even_strategy_uncompressed(ec_point_t* A24out, ec_point_t* second_to_last_j_inv, ec_point_t* A24in, const ec_point_t *kernel);
+
+/**
+ * @brief Evaluates an isogeny of degre 2^(f-1) while recording the point of order 2 in the kernel and the the curve found midway after lambda steps.
+ * Warning: Assumes that (0,0) is not in the kernel, and only works for even f.
+ *
+ * @param A24out computed codomain curve coefficient in the form (A+2C:4C)
+ * @param A24mid computed midway curve after degree 2^lambda, in the form (A+2C:4C)
+ * @param K2 computed point of order 2 over which the kernel point lays
+ * @param A24in the domain curve coefficient in the form (A+2C:4C)
+ * @param kernel a kernel generator of order 2^(f-1)
+ */
+void ec_eval_even_strategy_parallel(ec_point_t* A24out, ec_point_t *A24mid, ec_point_t *K2, ec_point_t* A24in, const ec_point_t *kernel);
+
+/**
+ * @brief Evaluates an isogeny of degree 2^lambda while pushing a single point. Assumes that the kernel doesn't contain (0,0)
+ *
+ * @param image the codomain curve in the ( A : C) form
+ * @param push_point a point to be pusehd in-place
+ * @param A24 the domain curve coefficient in the form (A+2C:4C)
+ * @param kernel a kernel generator of order 2^lambda not over (0,0)
+ */
+void ec_eval_even_strategy_chal(ec_curve_t* image, ec_point_t* push_point,
+    ec_point_t* A24, const ec_point_t *kernel);
+
+/**
+ * @brief Same as ec_eval_even_strategy_chal but doesn't push a point and instead stores the j invariant
+ * of the second-to-last curve in the chain.
+ *
+ * @param image computed codomain curve in the ( A : C) form
+ * @param second_to_last_j_inv computed projective j-invariant of the second-to-last curve in the chain
+ * @param A24 the domain curve coefficient in the form (A+2C:4C)
+ * @param kernel a kernel generator of order 2^lambda not over (0,0)
+ */
+void ec_eval_even_strategy_chal_uncompressed(ec_curve_t* image, ec_point_t* second_to_last_j_inv, const ec_point_t* A24, const ec_point_t *kernel);
 
 /**
  * @brief Evaluate isogeny of even degree on list of points, assuming the point (0,0) is not in the kernel
@@ -402,6 +555,40 @@ static inline void ec_eval_odd_basis(ec_curve_t* image, const ec_isog_odd_t* phi
     ec_basis_t* points, unsigned short length) {
     ec_eval_odd(image, phi, (ec_point_t*)points, sizeof(ec_basis_t) / sizeof(ec_point_t) * length);
 }
+
+/**
+ * @brief Generate an implicit 2^f-torsion basis using smart sampling.
+ *
+ * Not compatible with NIST round 1 KATs.
+ *
+ * @param P computed point of order a multiple of 2^f, not over (0,0)
+ * @param Q computed point of order a multiple of 2^f, over (0,0)
+ * @param Pa a non-(0,0) point of order 2 in the curve
+ */
+void ec_curve_to_implicit_basis_2_smart(ec_point_t *P, ec_point_t *Q, const ec_point_t *Pa);
+
+/**
+ * @brief All-in-one procedure to find an implicit basis with smart sampling and compute K = P + [scalar]*Q.
+ *
+ * @param K computed kernel point of order 2^f
+ * @param Pa a non-(0,0) point of order 2 in the curve
+ * @param scalar an unsigned multi-digit scalar
+ * @param swapPQ if true, computes Q + [scalar]*P instead of P + [scalar]*Q
+ */
+void ec_scalar_to_kernel_smart(ec_point_t *K, const ec_point_t *Pa, const digit_t *scalar, const bool swapPQ);
+
+/**
+ * @brief Same as ec_scalar_to_kernel_smart, but produces a point of order 2^lambda that is not over (0,0). Also returns
+ *      an auxiliary point of the same order that lays over (0,0).
+ *
+ * @param K computed kernel point of order 2^lambda
+ * @param R computer point of order 2^lambda not in the kernel
+ * @param Pa a non-(0,0) point of order 2 in the curve
+ * @param A24 the curve coefficient in (A+2C:4C) form
+ * @param scalar an unsigned multi-digit scalar
+ * @param swapPQ if true, computes Q + [scalar]*P instead of P + [scalar]*Q
+ */
+void ec_scalar_to_kernel_secpar_smart(ec_point_t *K, ec_point_t *R, const ec_point_t *Pa, const ec_point_t *A24, const digit_t *scalar);
 
 /** @}
 */

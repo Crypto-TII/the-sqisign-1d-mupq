@@ -1,5 +1,6 @@
 #include "curve_extras.h"
 #include <ec_params.h>
+#include <torsion_constants.h>
 #include <assert.h>
 
 bool ec_is_zero(ec_point_t const* P)
@@ -14,6 +15,32 @@ void ec_init(ec_point_t* P)
     memset((digit_t*)P, 0, NWORDS_FIELD*RADIX*4/8);
     one[0] = 1;
     fp_tomont(P->x.re, one);
+}
+
+void ec_mont_root(ec_point_t *P2, const ec_curve_t *curve){
+    fp2_t t0, t1;
+
+    // Normalize by C_conj
+    fp_copy(P2->z.re, curve->C.re);
+    fp_neg(P2->z.im, curve->C.im);
+    fp2_mul(&P2->x, &P2->z, &curve->A);
+    fp2_mul(&P2->z, &P2->z, &curve->C);
+
+    fp2_add(&P2->z, &P2->z, &P2->z);
+    fp2_add(&t0, &P2->x, &P2->z);
+    fp2_sub(&t1, &P2->x, &P2->z);
+    fp2_mul(&t0, &t0, &t1);
+    fp2_sqrt(&t0);
+    fp2_sub(&P2->x, &t0, &P2->x);
+}
+
+void ec_A24_from_mont_root(ec_point_t *A24, const ec_point_t *P2){
+    fp2_sub(&A24->x, &P2->x, &P2->z);
+    fp2_sqr(&A24->x, &A24->x);
+    fp2_neg(&A24->x, &A24->x);
+    fp2_mul(&A24->z, &P2->x, &P2->z);
+    fp2_add(&A24->z, &A24->z, &A24->z);
+    fp2_add(&A24->z, &A24->z, &A24->z);
 }
 
 void xDBL(ec_point_t* Q, ec_point_t const* P, ec_point_t const* AC)
@@ -35,6 +62,37 @@ void xDBL(ec_point_t* Q, ec_point_t const* P, ec_point_t const* AC)
     fp2_mul(&t0, &t0, &t2);
     fp2_add(&t0, &t0, &t1);
     fp2_mul(&Q->z, &t0, &t2);
+}
+
+void xTPL(ec_point_t* Q, const ec_point_t* P, const ec_point_t* A3)
+{
+    /* ----------------------------------------------------------------------------- *
+     * Differential point tripling given the montgomery coefficient A3 = (A+2C:A-2C)
+     * ----------------------------------------------------------------------------- */
+     
+    fp2_t t0, t1, t2, t3, t4;
+    fp2_sub(&t0, &P->x, &P->z);
+    fp2_sqr(&t2, &t0);
+    fp2_add(&t1, &P->x, &P->z);
+    fp2_sqr(&t3, &t1);
+    fp2_add(&t4, &t1, &t0);
+    fp2_sub(&t0, &t1, &t0);
+    fp2_sqr(&t1, &t4);
+    fp2_sub(&t1, &t1, &t3);
+    fp2_sub(&t1, &t1, &t2);
+    fp2_mul(&Q->x, &t3, &A3->x);
+    fp2_mul(&t3, &Q->x, &t3);
+    fp2_mul(&Q->z, &t2, &A3->z);
+    fp2_mul(&t2, &t2, &Q->z);
+    fp2_sub(&t3, &t2, &t3);
+    fp2_sub(&t2, &Q->x, &Q->z);
+    fp2_mul(&t1, &t2, &t1);
+    fp2_add(&t2, &t3, &t1);
+    fp2_sqr(&t2, &t2);
+    fp2_mul(&Q->x, &t2, &t4);
+    fp2_sub(&t1, &t3, &t1);
+    fp2_sqr(&t1, &t1);
+    fp2_mul(&Q->z, &t1, &t0);
 }
 
 void xDBLv2(ec_point_t* Q, ec_point_t const* P, ec_point_t const* A24)
@@ -218,6 +276,31 @@ void xMULv2(ec_point_t* Q, ec_point_t const* P, digit_t const* k, const int kbit
     fp2_copy(&Q->z, &R0.z);
 }
 
+void xMULdac(ec_point_t* Q, ec_point_t const* P, digit_t dac, int dac_len, ec_point_t const* A24){
+    // This version receives a differential addition chain rather than the raw scalar
+	ec_point_t R0, R1, R2, T;
+	copy_point(&R0, P);
+	xDBLv2(&R1, P, A24);
+	xADD(&R2, &R1, &R0, P);
+
+	int j;
+	for (int j = 0; j < dac_len; j++)
+	{
+		swap_points(&R0, &R1, -((dac >> j) & 1));
+		// Complete addition formulas are required to get rid of this branch
+		if (ec_is_zero(&R0))
+			xDBLv2(&T, &R2, A24);
+		else
+			xADD(&T, &R2, &R1, &R0);
+
+		copy_point(&R0, &R1);
+		copy_point(&R1, &R2);
+		copy_point(&R2, &T);
+	};
+
+	copy_point(Q, &R2);
+}
+
 static void mp_add(digit_t* c, const digit_t* a, const digit_t* b, const unsigned int nwords)
 { // Multiprecision addition
     unsigned int i, carry = 0;
@@ -366,6 +449,25 @@ void xDBLMUL(ec_point_t* S, ec_point_t const* P, digit_t const* k, ec_point_t co
     select_ct((digit_t*)S, (digit_t*)S, (digit_t*)&R[2], maskk, 4*NWORDS_FIELD);
 }
 
+void ec_ladder3ptv2(ec_point_t *R, const digit_t* m, const digit_t mbits, ec_point_t const *P, ec_point_t const *Q, ec_point_t const *PQ, ec_point_t const *A24)
+{
+
+	ec_point_t X0, X1, X2;
+	copy_point(&X0, Q);
+	copy_point(&X1, P);
+	copy_point(&X2, PQ);
+
+	int i;
+    digit_t t;
+	for (i = 0; i < mbits; i++)
+	{
+        swap_points(&X1, &X2, -(digit_t)(((m[i>>LOG2RADIX]>>(i & (RADIX-1))) & 1) == 0));
+        xDBLADD(&X0, &X1, &X0, &X1, &X2, A24);
+        swap_points(&X1, &X2, -(digit_t)(((m[i>>LOG2RADIX]>>(i & (RADIX-1))) & 1) == 0));
+	};
+	copy_point(R, &X1);
+}
+
 void ec_ladder3pt(ec_point_t *R, const digit_t* m, ec_point_t const *P, ec_point_t const *Q, ec_point_t const *PQ, ec_curve_t const *A)
 {
     // Curve constant in the form A24=(A+2C:4C)
@@ -397,24 +499,30 @@ void ec_ladder3pt(ec_point_t *R, const digit_t* m, ec_point_t const *P, ec_point
 
 void ec_j_inv(fp2_t* j_inv, const ec_curve_t* curve){
     /* j-invariant computation for montgommery coefficient A2=(A+2C:4C) */
+    ec_point_t j_inv_proj;
+    ec_j_inv_proj(&j_inv_proj, curve);
+    fp2_inv(&j_inv_proj.z);
+    fp2_mul(j_inv, &j_inv_proj.x, &j_inv_proj.z);  
+}
+
+void ec_j_inv_proj(ec_point_t* j_inv, const ec_curve_t* curve){
+    /* j-invariant computation for montgommery coefficient A2=(A+2C:4C) */
     fp2_t t0, t1;
     
     fp2_sqr(&t1, &curve->C);
-    fp2_sqr(j_inv, &curve->A);
-    fp2_add(&t0, &t1, &t1);
-    fp2_sub(&t0, j_inv, &t0);
-    fp2_sub(&t0, &t0, &t1);
-    fp2_sub(j_inv, &t0, &t1);
-    fp2_sqr(&t1, &t1);
-    fp2_mul(j_inv, j_inv, &t1);
+    fp2_sqr(&j_inv->z, &curve->A);
+    fp2_add(&t0, &t1, &t1);//2C^2
+    fp2_sub(&t0, &j_inv->z, &t0);//A^2-2C^2
+    fp2_sub(&t0, &t0, &t1);//A^2-3C^2
+    fp2_sub(&j_inv->z, &t0, &t1);//A^2-4C^2
+    fp2_sqr(&t1, &t1);//C^4
+    fp2_mul(&j_inv->z, &j_inv->z, &t1);//C^4(A^2-4C^2)
     fp2_add(&t0, &t0, &t0);
+    fp2_add(&t0, &t0, &t0);//4(A^2-3C^2)
+    fp2_sqr(&t1, &t0);//16(A^2-3C^2)^2
+    fp2_mul(&t0, &t0, &t1);//64(A^2-3C^2)^3
     fp2_add(&t0, &t0, &t0);
-    fp2_sqr(&t1, &t0);
-    fp2_mul(&t0, &t0, &t1);
-    fp2_add(&t0, &t0, &t0);
-    fp2_add(&t0, &t0, &t0);
-    fp2_inv(j_inv);
-    fp2_mul(j_inv, &t0, j_inv);    
+    fp2_add(&j_inv->x, &t0, &t0);//256(A^2-3C^2)^3
 }
 
 static void jac_init(jac_point_t* P)
@@ -628,7 +736,7 @@ void DBLMUL(jac_point_t* R, const jac_point_t* P, const digit_t* k, const jac_po
     ADD(&PQ, P, Q, curve);
     jac_init(R);
 
-    for (int i = 72; i >= 0; i--) {
+    for (int i = DLOG_SCALAR_BITS; i >= 0; i--) {
         int w = i/RADIX;
         k_t = k[w] >> (i % RADIX);
         k_t &= 0x01;
@@ -947,7 +1055,9 @@ void ec_dlog_2(digit_t* scalarP, digit_t* scalarQ, const ec_basis_t* PQ2, const 
 }
 
 static void ec_dlog_3_step(digit_t* x, digit_t* y, const jac_point_t* R, const int f, const int B, const jac_point_t* Pe3, const jac_point_t* Qe3, const jac_point_t* PQe3, const ec_curve_t* curve)
-{ // Based on Montgomery formulas using Jacobian coordinates
+{ 
+#if POWER_OF_3 > 2
+    // Based on Montgomery formulas using Jacobian coordinates
     int i, j;
     digit_t one[NWORDS_ORDER] = {1};
     digit_t two[NWORDS_ORDER] = {2};
@@ -1282,10 +1392,15 @@ static void ec_dlog_3_step(digit_t* x, digit_t* y, const jac_point_t* R, const i
         mp_add(y, y, value, NWORDS_ORDER);
         mp_add(y, y, value, NWORDS_ORDER);
     }
+#else
+    return;
+#endif
 }
 
 void ec_dlog_3(digit_t* scalarP, digit_t* scalarQ, const ec_basis_t* PQ3, const ec_point_t* R, const ec_curve_t* curve)
-{ // Optimized implementation based on Montgomery formulas using Jacobian coordinates
+{ 
+#if POWER_OF_3 > 2
+    // Optimized implementation based on Montgomery formulas using Jacobian coordinates
     int i;
     digit_t w0[NWORDS_ORDER] = {0}, z0[NWORDS_ORDER] = {0}, x0[NWORDS_ORDER] = {0}, y0[NWORDS_ORDER] = {0};
     digit_t x1[NWORDS_ORDER] = {0}, y1[NWORDS_ORDER] = {0}, w1[NWORDS_ORDER] = {0}, z1[NWORDS_ORDER] = {0};
@@ -1391,10 +1506,13 @@ void ec_dlog_3(digit_t* scalarP, digit_t* scalarQ, const ec_basis_t* PQ3, const 
     if (mp_compare(scalarP, THREEpFdiv2, NWORDS_ORDER) == 1 ||
        (mp_compare(scalarQ, THREEpFdiv2, NWORDS_ORDER) == 1 && (mp_is_zero(scalarP, NWORDS_ORDER) == 1))) {
         if (mp_is_zero(scalarP, NWORDS_ORDER) != 1)
-            mp_sub(scalarP, THREEpF, scalarP, NWORDS_ORDER);
+            mp_sub(scalarP, TORSION_PLUS_3POWER_DIGITS, scalarP, NWORDS_ORDER);
         if (mp_is_zero(scalarQ, NWORDS_ORDER) != 1)
-            mp_sub(scalarQ, THREEpF, scalarQ, NWORDS_ORDER);
+            mp_sub(scalarQ, TORSION_PLUS_3POWER_DIGITS, scalarQ, NWORDS_ORDER);
     }
+#else
+    return;
+#endif
 }
 
 

@@ -1,10 +1,8 @@
+#include <id2iso.h>
 #if defined(ENABLE_SIGN)
 #include <quaternion.h>
 #include <ec.h>
 #include <endomorphism_action.h>
-#endif
-#include <id2iso.h>
-#if defined(ENABLE_SIGN)
 #include <inttypes.h>
 #include <locale.h> 
 #include <bench.h>

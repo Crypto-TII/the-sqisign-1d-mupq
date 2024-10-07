@@ -8,7 +8,7 @@
 #ifndef ID2ISO_H
 #define ID2ISO_H
 
-#include "encoded_sizes.h"
+#include <encoded_sizes.h>
 
 #if defined(ENABLE_SIGN)
 #include <intbig.h>

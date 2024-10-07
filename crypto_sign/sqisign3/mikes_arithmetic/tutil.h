@@ -12,11 +12,6 @@
 #define BSWAP64(i) ((BSWAP32((i) >> 32) & 0xffffffff) | (BSWAP32(i) << 32)
 #endif
 
-#if defined(PQM4)
-#define RADIX_32
-#define ARITH_MIKE
-#endif
-
 #if defined(RADIX_64)
 #define digit_t uint64_t
 #define sdigit_t int64_t

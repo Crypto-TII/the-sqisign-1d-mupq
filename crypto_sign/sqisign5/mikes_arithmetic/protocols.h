@@ -52,7 +52,26 @@ typedef struct signature {
     } s;                                    /// second scalar encoding the challenge
 } signature_t;
 
-/** @brief Type for the public keys
+typedef struct signature_uncompressed {
+    ec_point_t kernel_points[ZIP_CHAIN_LEN]; // x coordinate for the generator of each block of the response isogeny
+    ec_curve_t E_COM; // Montgomery coefficient of the commitment curve
+} signature_uncompressed_t;
+
+typedef struct signature_parallel {
+    ec_point_t kernel_points[ZIP_CHAIN_LEN]; // x coordinate for the generator of each block of the response isogeny
+    ec_curve_t E_COM; // Montgomery coefficient of the commitment curve
+    ec_curve_t E_1; // Montgomery coefficient of the first intermediate curve in the response isogeny chain
+    ec_curve_t E_3; // Montgomery coefficient of the third intermediate curve in the response isogeny chain
+} signature_parallel_t;
+
+typedef struct signature_cparallel {
+    id2iso_compressed_long_two_isog_t zip;  /// the compressed isogeny 
+    digit_t r[NWORDS_ORDER];  
+    digit_t s[NWORDS_ORDER];  
+    ec_point_t alphas[2];
+} signature_cparallel_t;
+
+/** @brief Type for the regular public keys
  * 
  * @typedef public_key_t
  * 
@@ -62,6 +81,17 @@ typedef struct signature {
 typedef struct public_key {
 	ec_curve_t E; /// the normalized A coefficient of the Montgomery curve
 } public_key_t;
+
+/** @brief Type for the smart-sampling-based public keys
+ * 
+ * @typedef public_key_t
+ * 
+ * @struct public_key
+ * 
+*/
+typedef struct public_key_smart {
+	ec_point_t Pa; /// A non-(0,0) point of order 2 in the public curve
+} public_key_smart_t;
 
 #if defined(ENABLE_SIGN)
 /** @brief Type for the secret keys
@@ -100,8 +130,15 @@ void secret_key_init(secret_key_t *sk);
 void secret_key_finalize(secret_key_t *sk);
 #endif
 
-void signature_init(signature_t *sig);
-void signature_finalize(signature_t *sig);
+static inline void signature_init(signature_t *sig)
+{
+    id2iso_compressed_long_two_isog_init(&sig->zip, SQISIGN_signing_length);
+}
+
+static inline void signature_finalize(signature_t *sig)
+{
+    id2iso_compressed_long_two_isog_finalize(&sig->zip);
+}
 
 /** @defgroup signature The signature protocol
  * @{
@@ -139,6 +176,27 @@ orsion basis of the commitment curve
  * @param length: length of the message
  */
 void hash_to_challenge(digit_vec_2_t *scalars, const ec_curve_t *curve, const unsigned char *message, size_t length);
+
+/**
+ * @brief Hashing a commitment curve and a message directly to a kernel point.
+ *          Not compatible with NIST round 1 KATs
+ *
+ * @param output: the computed kernel point
+ * @param curve: the commitment curve
+ * @param message: byte string to be signed
+ * @param length: length of the message
+ */
+void hash_to_challenge_smart(ec_point_t *output, const ec_curve_t *curve, const unsigned char *message, size_t length);
+
+/**
+ * @brief Same as hash_to_challenge_smart but returns a point of order 2^(f-1) laying over the intended kernel point of order 2^lambda
+ *
+ * @param output: the computed kernel point
+ * @param curve: the commitment curve
+ * @param message: byte string to be signed
+ * @param length: length of the message
+ */
+void hash_to_challenge_parallel(ec_point_t *output, const ec_curve_t *curve, const unsigned char *message, size_t length);
 
 
 #if defined(ENABLE_SIGN)
@@ -216,6 +274,50 @@ int protocols_verif_from_chall(const signature_t *sig, ec_curve_t const *E2, con
     */
 int protocols_verif(const signature_t *sig,const public_key_t *pk,const unsigned char* m, size_t l);
 
+/**
+ * @brief Verifying a smart-sampling-based signature
+ *
+ * @param sig: the signature
+ * @param pk the public key 
+ * @param m the message
+ * @param l length of the message
+ * @returns a bit indicating if the verification succeeded  
+    */
+int protocols_verif_smart(const signature_t *sig, const public_key_smart_t *pk, const unsigned char* m, size_t l);
+
+/**
+ * @brief Verifying a signature with uncompressed points
+ *
+ * @param sig: the signature
+ * @param pk the public key 
+ * @param m the message
+ * @param l length of the message
+ * @returns a bit indicating if the verification succeeded  
+    */
+int protocols_verif_uncompressed(const signature_uncompressed_t *sig, const public_key_t *pk, const unsigned char* m, size_t l);
+
+/**
+ * @brief Verifying a parallel-friendly signature
+ *
+ * @param sig: the signature
+ * @param pk the public key 
+ * @param m the message
+ * @param l length of the message
+ * @returns a bit indicating if the verification succeeded  
+    */
+int protocols_verif_parallel(const signature_parallel_t *sig, const public_key_t *pk, const unsigned char* m, size_t l);
+
+/**
+ * @brief Verifying a parallel-friendly smart-sampling-based signature
+ *
+ * @param sig: the signature
+ * @param pk the public key 
+ * @param m the message
+ * @param l length of the message
+ * @returns a bit indicating if the verification succeeded  
+    */
+int protocols_verif_cparallel(const signature_cparallel_t *sig, const public_key_smart_t *pk, const unsigned char* m, size_t l);
+
 
 /** @}
 */
@@ -235,6 +337,14 @@ int protocols_verif(const signature_t *sig,const public_key_t *pk,const unsigned
  * @param pk : public key
     */
 void public_key_encode(unsigned char *enc, const public_key_t* pk);
+
+/**
+ * @brief Encodes a smart-smapling-based public key as a byte array
+ *
+ * @param enc : Output the encoded public key
+ * @param pk : public key
+    */
+void public_key_encode_smart(unsigned char *enc, const public_key_smart_t* pk);
 
 #if defined(ENABLE_SIGN)
 /**
@@ -256,12 +366,52 @@ void secret_key_encode(unsigned char *enc, const secret_key_t* sk, const public_
 void signature_encode(unsigned char* enc, const signature_t* sig);
 
 /**
- * @brief Encodes a public key as a byte array
+ * @brief Encodes a smart-sampling-based signature as a byte array
+ *
+ * @param enc : Output the encoded signature
+ * @param sig : signature
+    */
+void signature_encode_smart(unsigned char* enc, const signature_t* sig);
+
+/**
+ * @brief Encodes a signature as a byte array with uncompressed points
+ *
+ * @param enc : Output the encoded signature
+ * @param sig : signature
+    */
+void signature_encode_uncompressed(unsigned char* enc, const signature_uncompressed_t* sig);
+
+/**
+ * @brief Encodes a parallel-friendly signature as a byte array
+ *
+ * @param enc : Output the encoded signature
+ * @param sig : signature
+    */
+void signature_encode_parallel(unsigned char* enc, const signature_parallel_t* sig);
+
+/**
+ * @brief Encodes a parallel-friendly smart-sampling-based signature as a byte array
+ *
+ * @param enc : Output the encoded signature
+ * @param sig : signature
+    */
+void signature_encode_cparallel(unsigned char* enc, const signature_cparallel_t* sig);
+
+/**
+ * @brief Decodes a public key from a byte array
  *
  * @param pk : Output the decoded public key
  * @param enc : encoded public key
     */
 void public_key_decode(public_key_t* pk, const unsigned char *enc);
+
+/**
+ * @brief Decodes a smart-sampling-based public key from a byte array
+ *
+ * @param pk : Output the decoded public key
+ * @param enc : encoded public key
+    */
+void public_key_decode_smart(public_key_smart_t* pk, const unsigned char *enc);
 
 #if defined(ENABLE_SIGN)
 /**
@@ -275,12 +425,44 @@ void secret_key_decode(secret_key_t* sk, public_key_t* pk, const unsigned char *
 #endif
 
 /**
- * @brief Encodes a signature as a byte array
+ * @brief Decodes a signature from a byte array
  *
  * @param sig : Output the decoded signature
  * @param enc : encoded signature
     */
 void signature_decode(signature_t* sig, const unsigned char* enc);
+
+/**
+ * @brief Decodes a smart-sampling-based signature from a byte array
+ *
+ * @param sig : Output the decoded signature
+ * @param enc : encoded signature
+    */
+void signature_decode_smart(signature_t* sig, const unsigned char* enc);
+
+/**
+ * @brief Decodes a signature with uncompressed points from a byte array
+ *
+ * @param sig : Output the decoded signature
+ * @param enc : encoded signature
+    */
+void signature_decode_uncompressed(signature_uncompressed_t* sig, const unsigned char* enc);
+
+/**
+ * @brief Decodes a parallel-friendly signature from a byte array
+ *
+ * @param sig : Output the decoded signature
+ * @param enc : encoded signature
+    */
+void signature_decode_parallel(signature_parallel_t* sig, const unsigned char* enc);
+
+/**
+ * @brief Decodes a parallel-friendly smart-sampling-based signature from a byte array
+ *
+ * @param sig : Output the decoded signature
+ * @param enc : encoded signature
+    */
+void signature_decode_cparallel(signature_cparallel_t* sig, const unsigned char* enc);
 
 /** @}
 */

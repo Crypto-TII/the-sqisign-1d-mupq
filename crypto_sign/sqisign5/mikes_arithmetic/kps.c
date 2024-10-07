@@ -2,32 +2,29 @@
 #include "curve_extras.h"
 #include <assert.h>
 
-#if defined(ENABLE_SIGN)
+#if defined(ENABLE_SIGN) && !defined(PQM4)
+#define TREE_SIZE(LENF, h) (1 << (h)) * ((LENF) + 1 + ((LENF)-1) * h)
 
 int sI, sJ, sK;	// Sizes of each current I, J, and K	
 
 fp2_t I[sI_max][2],		// I plays also as the linear factors of the polynomial h_I(X)
 			EJ_0[sJ_max][3], EJ_1[sJ_max][3];	// To be used in xisog y xeval
 
-ec_point_t J[sJ_max], K[sK_max];		// Finite subsets of the kernel
+ec_point_t J[sJ_max];		// Finite subsets of the kernel
 fp2_t XZJ4[sJ_max],		// -4* (Xj * Zj) for each j in J, and x([j]P) = (Xj : Zj)
     rtree_A[(1 << (ceil_log_sI_max+2)) - 1],		// constant multiple of the reciprocal tree computation
     A0;			// constant multiple of the reciprocal R0
-
-poly ptree_hI[(1 << (ceil_log_sI_max+2)) - 1],		// product tree of h_I(X)
-     rtree_hI[(1 << (ceil_log_sI_max+2)) - 1],		// reciprocal tree of h_I(X)
-     ptree_EJ[(1 << (ceil_log_sJ_max+2)) - 1];		// product tree of E_J(X)
+	
+fp2_t ptree_hI[TREE_SIZE(2,ceil_log_sI_max)],		// product tree of h_I(X)
+     rtree_hI[TREE_SIZE(2,ceil_log_sI_max)],		// reciprocal tree of h_I(X)
+     ptree_EJ[TREE_SIZE(3,ceil_log_sJ_max)];		// product tree of E_J(X)
      
 fp2_t R0[2*sJ_max + 1];		// Reciprocal of h_I(X) required in the scaled remainder tree approach
 
-int deg_ptree_hI[(1 << (ceil_log_sI_max+2)) - 1],	// degree of each noed in the product tree of h_I(X)
-    deg_ptree_EJ[(1 << (ceil_log_sJ_max+2)) - 1];	// degree of each node in the product tree of E_J(X)
+int deg_ptree_hI[(1 << (ceil_log_sI_max+1)) - 1],	// degree of each noed in the product tree of h_I(X)
+    deg_ptree_EJ[(1 << (ceil_log_sJ_max+1)) - 1];	// degree of each node in the product tree of E_J(X)
 
 fp2_t leaves[sI_max];		// leaves of the remainder tree, which are required in the Resultant computation
-
-#else
-
-ec_point_t K[3];	
 
 #endif
 
@@ -36,7 +33,7 @@ ec_point_t K[3];
 // Traditional Kernel Point computation (KPs)
 
 // Kernel computation required in tye degree-4 isogeny evaluation
-void kps_4(ec_point_t const P)
+void kps_4(ec_point_t const P, ec_point_t K[3])
 {
 	fp2_sub(&K[1].x, &P.x, &P.z);
 	fp2_add(&K[2].x, &P.x, &P.z);
@@ -46,7 +43,7 @@ void kps_4(ec_point_t const P)
 }
 
 // Kernel computation required in the degree-3 isogeny evaluation
-void kps_3(ec_point_t const P)
+void kps_3(ec_point_t const P, ec_point_t K[3])
 {
 	fp2_sub(&K[0].x, &P.x, &P.z);
 	fp2_add(&K[1].x, &P.x, &P.z);
@@ -103,7 +100,7 @@ void yadd(ec_point_t* R, ec_point_t* const P, ec_point_t* const Q, ec_point_t* c
 }
 
 // tvelu formulae
-void kps_t(int i, ec_point_t const P, ec_point_t const A)
+void kps_t(int i, ec_point_t const P, ec_point_t const A, ec_point_t *K)
 {
 	int j;
 	int d = ((int)TORSION_ODD_PRIMES[i] - 1) / 2;
@@ -122,7 +119,7 @@ void kps_t(int i, ec_point_t const P, ec_point_t const A)
 // -----------------------------------------------------------
 // -----------------------------------------------------------
 // Kernel Point computation (KPs) used in velu SQRT
-void kps_s(int i, ec_point_t const P, ec_point_t const A)
+void kps_s(int i, ec_point_t const P, ec_point_t const A, ec_point_t *K)
 {
 	// =================================================================================
 	assert(TORSION_ODD_PRIMES[i] > gap);	// Ensuring velusqrt is used for l_i > gap
@@ -215,39 +212,24 @@ void kps_s(int i, ec_point_t const P, ec_point_t const A)
 	//                    i in I                 i in I
 	// In order to avoid costly inverse computations in fp, we are gonna work with projective coordinates
 
-	product_tree_LENFeq2(ptree_hI, deg_ptree_hI, 0, I, sI);				// Product tree of hI
+	product_tree(ptree_hI, deg_ptree_hI, 0, 0, (fp2_t*)I, 2, sI, ceil_log_sI_max);				// Product tree of hI
 	if (!scaled)
 	{
 		// (unscaled) remainder tree approach
-		reciprocal_tree(rtree_hI, rtree_A, 2*sJ + 1, ptree_hI, deg_ptree_hI, 0, sI);	// Reciprocal tree of hI
+		reciprocal_tree(rtree_hI, rtree_A, 2*sJ + 1, ptree_hI, deg_ptree_hI, 0, 0, sI, ceil_log_sI_max);	// Reciprocal tree of hI
 	}
 	else
 	{
 		// scaled remainder tree approach
 		fp2_t f_rev[sI_max + 1];
 		for (j = 0; j < (sI + 1); j++)
-			fp2_copy(&f_rev[j], &ptree_hI[0][sI - j]);
+			fp2_copy(&f_rev[j], &ptree_hI[sI - j]);
 
 		if (sI > (2*sJ - sI + 1))
 			reciprocal(R0, &A0, f_rev, sI + 1, sI);
 		else
 			reciprocal(R0, &A0, f_rev, sI + 1, 2*sJ - sI + 1);
 	};
-}
-
-void kps_clear(int i){
-		if (TORSION_ODD_PRIMES[i] > gap)
-		{
-			if (!scaled)
-				clear_tree(rtree_hI, 0, sizeI[i]);
-			clear_tree(ptree_hI, 0, sizeI[i]);
-		}
-}
-
-#else
-
-void kps_clear(int i){
-	return;
 }
 
 #endif
